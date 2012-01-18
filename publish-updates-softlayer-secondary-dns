@@ -102,6 +102,7 @@ my %statusId_description = (
 );
 
 my $ua = LWP::UserAgent->new(agent => 'endpoint-dns-bot/0.1');
+$ua->default_header('Accept-Encoding' => scalar HTTP::Message::decodable());
 (my $api_url_base = $api_url) =~ s{^(\w+://)}{$1$api_username:$api_key@};
 my $api_dns_secondary_url_base = $api_url_base . '/rest/v3/SoftLayer_Dns_Secondary';
 
