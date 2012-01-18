@@ -1,0 +1,284 @@
+#!/usr/bin/env perl
+
+# nagios: -epn
+
+# check_softlayer_transfer
+# Check for data transfer overages at SoftLayer via their REST API v3,
+# with Nagios-compatible API
+# by Jon Jensen <jon@endpoint.com>
+# 2012-01-18
+#
+# Note that what SoftLayer calls "bandwidth" of course really is not --
+# it is the monthly outbound data transfer allotment. I try to use the
+# correct term "transfer" when not referring to SoftLayer API names etc.
+#
+# Copyright © 2012 End Point Corporation, http://www.endpoint.com/
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+use strict;
+use warnings;
+
+use Getopt::Long qw( :config no_ignore_case bundling );
+use LWP::UserAgent;
+use JSON;
+use List::Util qw( max );
+
+our $VERSION = '0.1';
+
+
+#
+# Parse options
+#
+
+my %opt;
+my $parse = GetOptions(
+    \%opt,
+    qw(
+        debug
+        help|h
+        version|V
+        user|u=s
+        key|k=s
+        timeout|t:i
+        verbose|v+
+        private!
+        list|l
+        hostname|H=s
+        warning|w:i
+        critical|c:i
+    )
+);
+if (! $parse
+    or $opt{help}
+    or (!$opt{version} and (!$opt{user} or !$opt{key}))
+    or (!$opt{list} and !$opt{hostname} and !$opt{version})
+) {
+    die <<"USAGE";
+Usage: $0 [options]
+
+Information:
+-h, --help           output this help and exit
+-V, --version        show version and exit
+
+Required for actions below:
+-u, --user=USER      SoftLayer API user name
+-k, --key=KEY        SoftLayer API Access Key
+
+Actions:
+-l, --list           list available hostnames (for human consumption)
+-H, --hostname=NAME  hostname to check data transfer usage
+
+Options:
+    --private        use SoftLayer private network URL (otherwise public is used)
+-t, --timeout=NUM    seconds to wait before aborting web service calls
+-w, --warning=NUM    warning threshold (% of monthly data transfer allocation)
+-c, --critical=NUM   critical threshold (% of monthly data transfer allocation)
+-v, --verbose        show more detail; use up to three times to increase the level
+USAGE
+}
+
+if ($opt{version}) {
+    print "check_softlayer_transfer $VERSION\n";
+    exit;
+}
+
+$opt{verbose} ||= 0;
+my @verbose;
+
+
+#
+# Make web service calls
+#
+
+my $ua = LWP::UserAgent->new(agent => 'endpoint-bandwidth-bot/0.1');
+$ua->default_header('Accept-Encoding' => scalar HTTP::Message::decodable());
+$ua->timeout($opt{timeout}) if $opt{timeout};
+
+my $api_url = $opt{private} ? 'https://api.service.softlayer.com' : 'https://api.softlayer.com';
+(my $api_url_base = $api_url) =~ s{^(\w+://)}{$1$opt{user}:$opt{key}@};
+my $api_url_rest_base = $api_url_base . '/rest/v3/';
+
+my %hostname_to_id;
+
+# SoftLayer keeps hardware and cloud computing instances separate, so fetch both and merge
+for my $type (qw( Hardware VirtualGuests )) {
+    webservice_get(
+        $api_url_rest_base . "SoftLayer_Account/$type.json",
+        "list of $type servers",
+        sub {
+            for (@{$_[0]}) {
+                $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id};
+            }
+            return;
+        },
+    );
+}
+
+if ($opt{list}) {
+    print map { $_, "\n" } sort sort_mixed keys %hostname_to_id;
+    exit;
+}
+
+my $server_id;
+unless ($server_id = $hostname_to_id{$opt{hostname}}) {
+    nagios_die("Unknown hostname: $opt{hostname}\n");
+}
+
+my $metric_id
+    = webservice_get(
+        $api_url_rest_base . "SoftLayer_Hardware/$server_id/MetricTrackingObject.json",
+        "server metric object",
+        sub { $_[0]->{id} },
+    );
+
+my $bandwidth
+    = webservice_get(
+        $api_url_rest_base . "SoftLayer_Metric_Tracking_Object_Bandwidth_Summary/$metric_id.json",
+        "server bandwidth summary",
+    );
+
+#
+# Assess transfer usage situation
+#
+
+my $status_code = 3;   # default to unknown
+my $message = '';
+
+if ($bandwidth->{currentlyOverAllocationFlag}) {
+    $status_code = 2;
+    $message = "Currently over allocation!";
+}
+elsif ($bandwidth->{projectedOverAllocationFlag}) {
+    $status_code = 2;
+    $message = "Projected bandwidth over allocation!";
+}
+elsif (! defined $bandwidth->{outboundBandwidthAmount}) {
+    $status_code = 3;
+    $message = "Missing outboundBandwidthAmount, so can't check usage";
+}
+elsif (! defined $bandwidth->{allocationAmount}) {
+    $status_code = 3;
+    $message = "Missing allocationAmount, so can't check proportion used";
+}
+elsif ($bandwidth->{outboundBandwidthAmount} >= $bandwidth->{allocationAmount}) {
+    $status_code = 2;
+    $message = "Bandwidth used $bandwidth->{outboundBandwidthAmount} over allocation of $bandwidth->{allocationAmount}";
+}
+else {
+    my $used = $bandwidth->{outboundBandwidthAmount} / $bandwidth->{allocationAmount} * 100;
+    if (defined $opt{critical} and $used >= $opt{critical}) {
+        $status_code = 2;
+        $message = "$used% transfer used, over critical threshold of $opt{critical}";
+    }
+    elsif (defined $opt{warning} and $used >= $opt{warning}) {
+        $status_code = 1;
+        $message = "$used% transfer used, over warning threshold of $opt{warning}";
+    }
+    else {
+        # by now we've confirmed we have an amount and we're not over allocation, so we should be ok
+        $status_code = 0;
+        $message = sprintf('%0.1f', $used) . '% allocation used';
+    }
+}
+
+my $perf_data = '';
+if ($bandwidth->{outboundBandwidthAmount}) {
+    my $units = 'GB';
+    $perf_data = "|outbound=$bandwidth->{outboundBandwidthAmount}$units allocation=$bandwidth->{allocationAmount}$units";
+}
+
+my $status_message = {
+    0 => 'OK',
+    1 => 'WARNING',
+    2 => 'CRITICAL',
+    3 => 'UNKNOWN',
+}->{$status_code};
+
+print "TRANSFER $status_message: $message$perf_data\n";
+
+exit $status_code;
+
+
+
+#
+# Subroutines
+#
+
+sub nagios_die {
+    print "ERROR: ", shift;
+    print @verbose if @verbose;
+    exit 3;
+}
+
+sub webservice_get {
+    my ($url, $title, $processor) = @_;
+    my $result;
+    eval {
+        my $response = $ua->get($url);
+        if ($response->is_success) {
+            my $json = $response->decoded_content;
+            push @verbose, $json if $opt{verbose} >= 3;
+            $result = decode_json($json);
+            if (ref $processor eq 'CODE') {
+                $result = $processor->($result);
+            }
+        }
+        else {
+            my $msg = $response->status_line . "\n";
+            push @verbose, $response->decoded_content . "\n" if $opt{verbose} >= 3;
+            die $msg;
+        }
+    };
+    if ($@) {
+        chomp $@;
+        nagios_die("Error retrieving $title: $@\n");
+    }
+    return $result;
+}
+
+# Routine to sensibly sort e.g. hostnames with numeric parts
+sub sort_mixed {
+    # do simple string sort and bail out if our \0 marker is present
+    return $a cmp $b if $a =~ /\0/ or $b =~ /\0/;
+
+    local $a = $a;
+    local $b = $b;
+
+    # break string into text/numeric chunks
+    for ($a, $b) {
+        s/(\D)(\d)/$1\0$2/g;
+        s/(\d)([^\d\0])/$1\0$2/g;
+    }
+    my @split_a = split /\0/, $a;
+    my @split_b = split /\0/, $b;
+
+    for my $i (0 .. (max scalar @split_a, scalar @split_b) - 1) {
+        # is this slice of both strings numeric?
+        if (
+            grep /^\d+$/, $split_a[$i]
+            and grep /^\d+$/, $split_b[$i]
+        ) {
+            # then pad with 0 to same width so it'll sort as a string
+            my $length = max length($split_a[$i]), length($split_b[$i]);
+            for my $val ($split_a[$i], $split_b[$i]) {
+                $val = sprintf("%0${length}u", $val);
+            }
+        }
+    }
+
+    my $new_a = join '', @split_a;
+    my $new_b = join '', @split_b;
+    return $new_a cmp $new_b;
+}
