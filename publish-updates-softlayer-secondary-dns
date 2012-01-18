@@ -11,12 +11,12 @@
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
@@ -32,7 +32,7 @@ use JSON;
 
 
 #
-# Configuration
+# Configuration - edit for your environment
 #
 
 my $remote_domains_dir = '/var/named/master';
@@ -65,11 +65,11 @@ my $parse = GetOptions(
     )
 );
 
-my $api_url = $opt{private} ? 'https://api.service.softlayer.com' : 'https://api.softlayer.com';
-
 if (! $parse or $opt{help} or ! grep /^(?:list|purge|push|transfer|update)$/, keys %opt) {
     die <<"USAGE";
 Usage: $0 [options] [one or more actions]
+
+(Note that some configuration is hardcoded in the program; edit as needed.)
 
 Actions:
 -h, --help     output this help
@@ -104,6 +104,8 @@ my %statusId_description = (
 
 my $ua = LWP::UserAgent->new(agent => 'endpoint-dns-bot/0.1');
 $ua->default_header('Accept-Encoding' => scalar HTTP::Message::decodable());
+
+my $api_url = $opt{private} ? 'https://api.service.softlayer.com' : 'https://api.softlayer.com';
 (my $api_url_base = $api_url) =~ s{^(\w+://)}{$1$api_username:$api_key@};
 my $api_dns_secondary_url_base = $api_url_base . '/rest/v3/SoftLayer_Dns_Secondary';
 
