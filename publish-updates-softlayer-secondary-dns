@@ -1,0 +1,307 @@
+#!/usr/bin/env perl
+
+# publish-updates-softlayer-secondary-dns
+# Manage SoftLayer secondary DNS via their REST API v3
+# by Jon Jensen <jon@endpoint.com>
+# 2011-04-28
+#
+# Copyright © 2011-2012 End Point Corporation, http://www.endpoint.com/
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use LWP::UserAgent;
+use HTTP::Request::Common qw( PUT DELETE );
+use URI::Escape;
+use JSON;
+
+
+#
+# Configuration
+#
+
+my $remote_domains_dir = '/var/named/master';
+my $master_ip_address = 'a.b.c.d';
+my $transfer_frequency = 10;  # minutes
+
+my $api_username = 'X';
+my $api_key = 'Y';
+
+# prevent disasters due to weird problems; require at least this many local domains be found
+my $minimum_domain_threshold = 10;
+
+
+#
+# Parse options
+#
+
+my %opt;
+my $parse = GetOptions(
+    \%opt,
+    qw(
+        debug
+        help|h
+        list|l
+        private
+        purge
+        push
+        transfer
+        update
+    )
+);
+
+my $api_url = $opt{private} ? 'https://api.service.softlayer.com' : 'https://api.softlayer.com';
+
+if (! $parse or $opt{help} or ! grep /^(?:list|purge|push|transfer|update)$/, keys %opt) {
+    die <<"USAGE";
+Usage: $0 [options] [one or more actions]
+
+Actions:
+-h, --help     output this help
+-l, --list     list domains hosted on remote service
+    --purge    purge domains from remote service not hosted locally
+    --push     push new local domains to remote service
+    --transfer request zone transfer by remote service for named or all domains
+    --update   update all remote domains with current configuration:
+               master IP address: $master_ip_address
+               transfer every $transfer_frequency minutes
+
+Options:
+    --debug    show extra debugging output
+    --private  use private network URL (otherwise public is used)
+USAGE
+}
+
+
+#
+# Main actions
+#
+
+# mostly documented at:
+# http://sldn.softlayer.com/wiki/index.php/SoftLayer_Dns_Secondary_%28type%29#statusId
+my %statusId_description = (
+    0 => 'Disabled',
+    1 => 'Active',
+    2 => 'Transfer Now',
+    3 => 'Transfer Error',
+    4 => 'New',
+);
+
+my $ua = LWP::UserAgent->new(agent => 'endpoint-dns-bot/0.1');
+(my $api_url_base = $api_url) =~ s{^(\w+://)}{$1$api_username:$api_key@};
+my $api_dns_secondary_url_base = $api_url_base . '/rest/v3/SoftLayer_Dns_Secondary';
+
+my $printed_something;
+
+my $remote_domains;
+my $remote_domains_dirty;
+refresh_remote_domains(1);
+
+my $local_domains = get_local_domains();
+my %local_domains;
+@local_domains{@$local_domains} = ();
+
+
+if ($opt{push}) {
+    my %remote_domains;
+    @remote_domains{ map { lc $_->{zoneName} } @$remote_domains } = ();
+    my @missing_remote_domains = grep { ! exists $remote_domains{$_} } @$local_domains;
+    if (@missing_remote_domains) {
+        print "Pushing new domains to remote service\n";
+        create_domain($_) for @missing_remote_domains;
+        $remote_domains_dirty = 1;
+    }
+    else {
+        print "No new local domains to push to remote service\n";
+    }
+    $printed_something = 1;
+}
+
+if ($opt{update}) {
+    print "\n" if $printed_something++;
+    print "Updating configuration of all domains on remote service\n";
+    refresh_remote_domains();
+    update_domain($_) for sort { $a->{zoneName} cmp $b->{zoneName} } @$remote_domains;
+    $remote_domains_dirty = 1;
+}
+
+if ($opt{purge}) {
+    my @extra_remote_domains = grep { ! exists $local_domains{lc $_->{zoneName}} } @$remote_domains;
+    print "\n" if $printed_something++;
+    if (@extra_remote_domains) {
+        # try to avoid serious mass-deletion accidents
+        if (@extra_remote_domains == @$remote_domains) {
+            die "Aborting! All domains were set to be deleted.\n";
+        }
+        if (@extra_remote_domains > (@$remote_domains / 5)) {
+            die "Aborting! More than 1/5 of all remote domains were set to be deleted.\n";
+        }
+
+        print "Purging defunct domains from remote service\n";
+        delete_domain($_) for @extra_remote_domains;
+        $remote_domains_dirty = 1;
+    }
+    else {
+        print "No defunct domains to purge from remote service\n";
+    }
+}
+
+if ($opt{transfer}) {
+    my @transfer_domains = sort map { lc } (@ARGV ? @ARGV : map { $_->{zoneName} } @$remote_domains);
+    print "\n" if $printed_something++;
+    if (@transfer_domains) {
+        print "Requesting transfer for " . @transfer_domains . " domains\n";
+        transfer_domain($_) for @transfer_domains;
+    }
+    else {
+        print "No remote domains to request transfer for\n";
+    }
+}
+
+refresh_remote_domains();
+
+if ($opt{list}) {
+    print "\n" if $printed_something++;
+    print "Domains now at remote service:\n";
+    for my $domain (sort { $a->{zoneName} cmp $b->{zoneName} } @$remote_domains ) {
+        my $status = $statusId_description{$domain->{statusId}} || 'unknown';
+        my $last_updated = $domain->{lastUpdate} || 'unknown';
+        print "$domain->{zoneName} status=$status updated=$last_updated\n";
+    }
+
+    my @extra_remote_domains = grep { ! exists $local_domains{lc $_->{zoneName}} } @$remote_domains;
+    if (@extra_remote_domains) {
+        print "\nRemote domains that do not exist locally and could be purged:\n";
+        print lc($_->{zoneName}), "\n" for @extra_remote_domains;
+    }
+
+    my %remote_domains;
+    @remote_domains{ map { lc $_->{zoneName} } @$remote_domains } = ();
+    my @missing_remote_domains = grep { ! exists $remote_domains{$_} } @$local_domains;
+    if (@missing_remote_domains) {
+        print "\nLocal domains missing from remote service:\n";
+        print $_, "\n" for @missing_remote_domains;
+    }
+}
+
+print "\n" if $printed_something++;
+print "Totals: " . @$local_domains . " local domains, " . @$remote_domains . " remote domains\n";
+
+
+#
+# Subroutines
+#
+
+sub refresh_remote_domains {
+    my ($force) = @_;
+    return unless $remote_domains_dirty or $force;
+    $remote_domains = get_remote_domains();
+    undef $remote_domains_dirty;
+    return;
+}
+
+sub get_remote_domains {
+    # Alternate undocumented way to search for all domains:
+    #my $url = $api_dns_secondary_url_base . '/getByDomainName/' . uri_escape_utf8('%') . '.json';
+    my $url = $api_url_base . '/rest/v3/SoftLayer_Account/SecondaryDomains.json';
+    my $response = $ua->get($url);
+    unless ($response->is_success) {
+        die $response->status_line, "\n";
+    }
+    my $result = decode_json($response->decoded_content);
+    warn JSON->new->pretty->encode($result), "\n" if $opt{debug};
+    return $result;
+}
+
+sub transfer_domain {
+    my ($domain_name) = @_;
+    return unless $domain_name;
+    $domain_name = lc $domain_name;
+    my ($domain) = grep { $domain_name eq lc $_->{zoneName} } @$remote_domains;
+    unless ($domain) {
+        warn "Skipping unknown domain $domain_name\n";
+        return;
+    }
+    my $url = $api_dns_secondary_url_base . '/' . $domain->{id} . '/transferNow.json';
+    print $domain_name, "\n";
+    my $response = $ua->get($url);
+    unless ($response->is_success) {
+        die $response->status_line, "\n", $response->decoded_content, "\n";
+    }
+    return;
+}
+
+sub create_domain {
+    my @domain_names = @_;
+    return unless @domain_names;
+    die "create_domain() only works with a single domain due to API limitations\n"
+        if @domain_names > 1;
+    my @domains = map {
+            {
+                zoneName => lc($_),
+                transferFrequency => $transfer_frequency,
+                masterIpAddress => $master_ip_address,
+            }
+        } @domain_names;
+    print $_, "\n" for @domain_names;
+    my $url = $api_dns_secondary_url_base . '.json';
+    my $response = $ua->post($url, Content => encode_json({ parameters => \@domains }));
+    unless ($response->is_success) {
+        die $response->status_line, "\n", $response->decoded_content, "\n";
+    }
+    return;
+}
+
+sub update_domain {
+    my ($domain) = @_;
+    return unless $domain;
+    my $url = $api_dns_secondary_url_base . '/' . $domain->{id} . '.json';
+    my $domain_name = lc $domain->{zoneName};
+    my %domain = (
+        zoneName => $domain_name,
+        transferFrequency => $transfer_frequency,
+        masterIpAddress => $master_ip_address,
+    );
+    print $domain_name, "\n";
+    my $response = $ua->request(PUT $url, Content => encode_json({ parameters => [ \%domain ] }));
+    unless ($response->is_success) {
+        die $response->status_line, "\n", $response->decoded_content, "\n";
+    }
+    return;
+}
+
+sub delete_domain {
+    my ($domain) = @_;
+    return unless $domain;
+    my $url = $api_dns_secondary_url_base . '/' . $domain->{id} . '.json';
+    my $domain_name = lc $domain->{zoneName};
+    print $domain_name, "\n";
+    my $response = $ua->request(DELETE $url);
+    unless ($response->is_success) {
+        die $response->status_line, "\n", $response->decoded_content, "\n";
+    }
+    return;
+}
+
+sub get_local_domains {
+    opendir my $dh, $remote_domains_dir or die "Error opening directory $remote_domains_dir\n";
+    my @domains = sort map { lc } grep ! /_/, grep /^\w.+\.\w+$/, readdir($dh);
+    closedir $dh;
+    die "Aborting! Suspiciously small number of local domains found: " . @domains . "\n"
+        unless @domains and @domains > $minimum_domain_threshold;
+    return \@domains;
+}
