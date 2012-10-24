@@ -23,6 +23,9 @@
 use strict;
 use warnings;
 
+# On OpenBSD 4.8 and 4.9, install packges:
+# pkg_add p5-libwww p5-URI p5-JSON p5-JSON-XS
+
 use Getopt::Long;
 use LWP::UserAgent;
 use LWP::Protocol::https;
