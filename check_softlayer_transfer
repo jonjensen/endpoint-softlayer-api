@@ -51,6 +51,7 @@ my $parse = GetOptions(
         version|V
         user|u=s
         key|k=s
+        renewal|r:i
         timeout|t:i
         verbose|v+
         private!
@@ -82,6 +83,7 @@ Actions:
 
 Options:
     --private        use SoftLayer private network URL (otherwise public is used)
+-r, --renewal=NUM    day-of-month the projected bandwidth metric is innacurate
 -t, --timeout=NUM    seconds to wait before aborting web service calls
 -w, --warning=NUM    warning threshold (% of monthly data transfer allocation)
 -c, --critical=NUM   critical threshold (% of monthly data transfer allocation)
@@ -97,6 +99,9 @@ if ($opt{version}) {
 $opt{verbose} ||= 0;
 my @verbose;
 
+$opt{renewal} ||= 0;
+my @timeinfo = localtime(time);
+my $dom = $timeinfo[3];
 
 #
 # Make web service calls
@@ -160,7 +165,7 @@ if ($bandwidth->{currentlyOverAllocationFlag}) {
     $status_code = 2;
     $message = "Currently over allocation!";
 }
-elsif ($bandwidth->{projectedOverAllocationFlag}) {
+elsif ($bandwidth->{projectedOverAllocationFlag} && ($opt{renewal} != $dom)) {
     $status_code = 2;
     $message = "Projected bandwidth over allocation!";
 }
