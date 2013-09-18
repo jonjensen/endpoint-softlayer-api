@@ -83,7 +83,7 @@ Actions:
 
 Options:
     --private        use SoftLayer private network URL (otherwise public is used)
--r, --renewal=NUM    day-of-month the projected bandwidth metric is innacurate
+-r, --renewal=NUM    day-of-month the projected bandwidth metric is inaccurate
 -t, --timeout=NUM    seconds to wait before aborting web service calls
 -w, --warning=NUM    warning threshold (% of monthly data transfer allocation)
 -c, --critical=NUM   critical threshold (% of monthly data transfer allocation)
