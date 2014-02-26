@@ -53,6 +53,7 @@ my $parse = GetOptions(
         renewal|r:i
         timeout|t:i
         verbose|v+
+        type|T=s
         private!
         list|l
         hostname|H=s
@@ -64,6 +65,7 @@ if (! $parse
     or $opt{help}
     or (!$opt{version} and (!$opt{user} or !$opt{key}))
     or (!$opt{list} and !$opt{hostname} and !$opt{version})
+    or ($opt{type} and $opt{type} ne "Hardware" and $opt{type} ne "VirtualGuests")
 ) {
     die <<"USAGE";
 Usage: $0 [options]
@@ -81,6 +83,7 @@ Actions:
 -H, --hostname=NAME  hostname to check data transfer usage
 
 Options:
+-T, --type=TYPE      SoftLayer host type, "Hardware" by default, or "VirtualGuests"
     --private        use SoftLayer private network URL (otherwise public is used)
 -r, --renewal=NUM    day-of-month the projected bandwidth metric is inaccurate
 -t, --timeout=NUM    seconds to wait before aborting web service calls
@@ -94,6 +97,8 @@ if ($opt{version}) {
     print "check_softlayer_transfer $VERSION\n";
     exit;
 }
+
+$opt{type} ||= "Hardware";
 
 $opt{verbose} ||= 0;
 my @verbose;
@@ -116,19 +121,16 @@ my $api_url_rest_base = $api_url_base . '/rest/v3/';
 
 my %hostname_to_id;
 
-# SoftLayer keeps hardware and cloud computing instances separate, so fetch both and merge
-for my $type (qw( Hardware VirtualGuests )) {
-    webservice_get(
-        $api_url_rest_base . "SoftLayer_Account/$type.json",
-        "list of $type servers",
-        sub {
-            for (@{$_[0]}) {
-                $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id};
-            }
-            return;
-        },
-    );
-}
+webservice_get(
+    $api_url_rest_base . "SoftLayer_Account/$opt{type}.json",
+    "list of $opt{type} servers",
+    sub {
+        for (@{$_[0]}) {
+            $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id};
+        }
+        return;
+    },
+);
 
 if ($opt{list}) {
     print map { $_, "\n" } sort sort_mixed keys %hostname_to_id;
@@ -142,7 +144,7 @@ unless ($server_id = $hostname_to_id{$opt{hostname}}) {
 
 my $metric_id
     = webservice_get(
-        $api_url_rest_base . "SoftLayer_Hardware/$server_id/MetricTrackingObject.json",
+        $api_url_rest_base . ($opt{type} eq "Hardware" ? "SoftLayer_Hardware" : "SoftLayer_Virtual_Guest") . "/$server_id/MetricTrackingObject.json",
         "server metric object",
         sub { $_[0]->{id} },
     );
