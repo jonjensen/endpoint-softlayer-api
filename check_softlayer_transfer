@@ -164,11 +164,12 @@ my $message = '';
 
 if ($bandwidth->{currentlyOverAllocationFlag}) {
     $status_code = 2;
-    $message = "Currently over allocation!";
+    $message = "Currently " . ($bandwidth->{outboundBandwidthAmount} - $bandwidth->{allocationAmount}) . "GB over allocation!";
+    $message .= " Projected overage " . ($bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "GB.";
 }
 elsif ($bandwidth->{projectedOverAllocationFlag} && ($opt{renewal} != $dom)) {
     $status_code = 2;
-    $message = "Projected bandwidth over allocation!";
+    $message = "Projected bandwidth " . ($bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "GB over allocation!";
 }
 elsif (! defined $bandwidth->{outboundBandwidthAmount}) {
     $status_code = 3;
