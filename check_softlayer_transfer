@@ -126,7 +126,8 @@ webservice_get(
     "list of $opt{type} servers",
     sub {
         for (@{$_[0]}) {
-            $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id};
+            $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id} if $_->{fullyQualifiedDomainName};
+            $hostname_to_id{$_->{id}} = $_->{id};
         }
         return;
     },
