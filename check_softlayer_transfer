@@ -65,7 +65,7 @@ if (! $parse
     or $opt{help}
     or (!$opt{version} and (!$opt{user} or !$opt{key}))
     or (!$opt{list} and !$opt{hostname} and !$opt{version})
-    or ($opt{type} and $opt{type} ne "Hardware" and $opt{type} ne "VirtualGuests")
+    or ($opt{type} and $opt{type} ne "Hardware" and $opt{type} ne "VirtualGuests" and $opt{type} ne "VirtualDedicatedRacks")
 ) {
     die <<"USAGE";
 Usage: $0 [options]
@@ -107,6 +107,12 @@ $opt{renewal} ||= 0;
 my @timeinfo = localtime(time);
 my $dom = $timeinfo[3];
 
+my %types = (
+    Hardware => "SoftLayer_Hardware",
+    VirtualGuests => "SoftLayer_Virtual_Guest",
+    VirtualDedicatedRacks => "SoftLayer_Network_Bandwidth_Version1_Allotment",
+);
+
 #
 # Make web service calls
 #
@@ -126,7 +132,8 @@ webservice_get(
     "list of $opt{type} servers",
     sub {
         for (@{$_[0]}) {
-            $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id};
+            $hostname_to_id{$_->{fullyQualifiedDomainName}} = $_->{id} if $_->{fullyQualifiedDomainName};
+            $hostname_to_id{$_->{id}} = $_->{id};
         }
         return;
     },
@@ -144,7 +151,7 @@ unless ($server_id = $hostname_to_id{$opt{hostname}}) {
 
 my $metric_id
     = webservice_get(
-        $api_url_rest_base . ($opt{type} eq "Hardware" ? "SoftLayer_Hardware" : "SoftLayer_Virtual_Guest") . "/$server_id/MetricTrackingObject.json",
+        $api_url_rest_base . $types{$opt{type}} . "/$server_id/MetricTrackingObject.json",
         "server metric object",
         sub { $_[0]->{id} },
     );
@@ -164,11 +171,12 @@ my $message = '';
 
 if ($bandwidth->{currentlyOverAllocationFlag}) {
     $status_code = 2;
-    $message = "Currently over allocation!";
+    $message = "Currently " . ($bandwidth->{outboundBandwidthAmount} - $bandwidth->{allocationAmount}) . "GB over allocation!";
+    $message .= " Projected overage " . ($bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "GB.";
 }
 elsif ($bandwidth->{projectedOverAllocationFlag} && ($opt{renewal} != $dom)) {
     $status_code = 2;
-    $message = "Projected bandwidth over allocation!";
+    $message = "Projected bandwidth " . ($bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "GB over allocation!";
 }
 elsif (! defined $bandwidth->{outboundBandwidthAmount}) {
     $status_code = 3;
