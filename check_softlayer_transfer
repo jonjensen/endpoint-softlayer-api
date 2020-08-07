@@ -194,11 +194,11 @@ else {
     my $used = $bandwidth->{outboundBandwidthAmount} / $bandwidth->{allocationAmount} * 100;
     if (defined $opt{critical} and $used >= $opt{critical}) {
         $status_code = 2;
-		$message = sprintf('%0.1f', $used) . "% transfer used, over critical threshold of $opt{critical}%";
+        $message = sprintf('%0.1f', $used) . "% transfer used, over critical threshold of $opt{critical}%";
     }
     elsif (defined $opt{warning} and $used >= $opt{warning}) {
         $status_code = 1;
-		$message = sprintf('%0.1f', $used) . "% transfer used, over warning threshold of $opt{warning}%";
+        $message = sprintf('%0.1f', $used) . "% transfer used, over warning threshold of $opt{warning}%";
     }
     else {
         # by now we've confirmed we have an amount and we're not over allocation, so we should be ok
