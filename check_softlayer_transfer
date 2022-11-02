@@ -34,7 +34,7 @@ use LWP::UserAgent;
 use JSON;
 use List::Util qw( max );
 
-our $VERSION = '0.3';
+our $VERSION = '0.4';
 
 
 #
@@ -113,6 +113,9 @@ my %types = (
     VirtualDedicatedRacks => "SoftLayer_Network_Bandwidth_Version1_Allotment",
 );
 
+my $units = 'GB';
+my $number_format = '%0.1f';
+
 #
 # Make web service calls
 #
@@ -171,12 +174,12 @@ my $message = '';
 
 if ($bandwidth->{currentlyOverAllocationFlag}) {
     $status_code = 2;
-    $message = "Currently " . ($bandwidth->{outboundBandwidthAmount} - $bandwidth->{allocationAmount}) . "GB over allocation!";
-    $message .= " Projected overage " . ($bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "GB.";
+    $message = "Currently " . sprintf($number_format, $bandwidth->{outboundBandwidthAmount} - $bandwidth->{allocationAmount}) . "$units over allocation!";
+    $message .= " Projected overage " . sprintf($number_format, $bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "$units.";
 }
 elsif ($bandwidth->{projectedOverAllocationFlag} && ($opt{renewal} != $dom)) {
     $status_code = 2;
-    $message = "Projected bandwidth " . ($bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "GB over allocation!";
+    $message = "Projected bandwidth " . sprintf($number_format, $bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "$units over allocation!";
 }
 elsif (! defined $bandwidth->{outboundBandwidthAmount}) {
     $status_code = 3;
@@ -188,29 +191,28 @@ elsif (! defined $bandwidth->{allocationAmount}) {
 }
 elsif ($bandwidth->{outboundBandwidthAmount} >= $bandwidth->{allocationAmount}) {
     $status_code = 2;
-    $message = "Bandwidth used $bandwidth->{outboundBandwidthAmount} over allocation of $bandwidth->{allocationAmount}";
+    $message = sprintf("Bandwidth used $number_format over allocation of $number_format", $bandwidth->{outboundBandwidthAmount}, $bandwidth->{allocationAmount});
 }
 else {
     my $used = $bandwidth->{outboundBandwidthAmount} / $bandwidth->{allocationAmount} * 100;
     if (defined $opt{critical} and $used >= $opt{critical}) {
         $status_code = 2;
-        $message = sprintf('%0.1f', $used) . "% transfer used, over critical threshold of $opt{critical}%";
+        $message = sprintf($number_format, $used) . "% transfer used, over critical threshold of $opt{critical}%";
     }
     elsif (defined $opt{warning} and $used >= $opt{warning}) {
         $status_code = 1;
-        $message = sprintf('%0.1f', $used) . "% transfer used, over warning threshold of $opt{warning}%";
+        $message = sprintf($number_format, $used) . "% transfer used, over warning threshold of $opt{warning}%";
     }
     else {
         # by now we've confirmed we have an amount and we're not over allocation, so we should be ok
         $status_code = 0;
-        $message = sprintf('%0.1f', $used) . '% allocation used';
+        $message = sprintf($number_format, $used) . '% allocation used';
     }
 }
 
 my $perf_data = '';
 if ($bandwidth->{outboundBandwidthAmount}) {
-    my $units = 'GB';
-    $perf_data = "|outbound=$bandwidth->{outboundBandwidthAmount}$units allocation=$bandwidth->{allocationAmount}$units";
+    $perf_data = sprintf("|outbound=$number_format$units allocation=$number_format$units", $bandwidth->{outboundBandwidthAmount}, $bandwidth->{allocationAmount});
 }
 
 my $status_message = {
