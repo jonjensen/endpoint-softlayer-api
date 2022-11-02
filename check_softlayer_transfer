@@ -240,6 +240,7 @@ sub webservice_get {
     my ($url, $title, $processor) = @_;
     my $result;
     eval {
+        push @verbose, $url if $opt{verbose} >= 2;
         my $response = $ua->get($url);
         if ($response->is_success) {
             my $json = $response->decoded_content;
