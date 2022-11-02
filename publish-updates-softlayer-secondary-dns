@@ -2,10 +2,10 @@
 
 # publish-updates-softlayer-secondary-dns
 # Manage SoftLayer secondary DNS via their REST API v3
-# by Jon Jensen <jon@endpoint.com>
+# by Jon Jensen <jon@endpointdev.com>
 # 2011-04-28
 #
-# Copyright © 2011-2012 End Point Corporation, http://www.endpoint.com/
+# Copyright © 2011–2012 End Point Corporation, https://www.endpointdev.com/
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by

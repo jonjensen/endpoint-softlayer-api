@@ -3,15 +3,15 @@
 # nagios: -epn
 
 # check_softlayer_transfer
-# Check for data transfer overages at SoftLayer via their REST API v3,
+# Check for data transfer overages at SoftLayer (IBM Cloud) via their REST API v3,
 # with Nagios-compatible API
-# by Jon Jensen <jon@endpoint.com>
+# by Jon Jensen <jon@endpointdev.com>
 #
 # Note that what SoftLayer calls "bandwidth" of course really is not --
 # it is the monthly outbound data transfer allotment. I try to use the
 # correct term "transfer" when not referring to SoftLayer API names etc.
 #
-# Copyright © 2012-2014 End Point Corporation, http://www.endpoint.com/
+# Copyright © 2012–2022 End Point Corporation, http://www.endpointdev.com/
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by

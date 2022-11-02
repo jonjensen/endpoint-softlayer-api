@@ -1,4 +1,4 @@
-SoftLayer API tools
+SoftLayer (IBM Cloud) API tools
 
 This is a small set of standalone programs that interface with SoftLayer's
 API, which we have found useful at End Point. Important links:
@@ -13,4 +13,4 @@ store the API key.
 
 Jon Jensen
 End Point Corporation
-http://www.endpoint.com/
+https://www.endpointdev.com/
