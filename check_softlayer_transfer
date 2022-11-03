@@ -58,6 +58,8 @@ my $parse = GetOptions(
         list|l
         hostname|H=s
         warning|w:i
+        overage_projected_critical|overage-projected-critical|o!
+        overage_current_critical|overage-current-critical|O!
         critical|c:i
     )
 );
@@ -83,12 +85,14 @@ Actions:
 -H, --hostname=NAME  hostname to check data transfer usage
 
 Options:
--T, --type=TYPE      SoftLayer host type, "Hardware" by default, or "VirtualGuests"
+-T, --type=TYPE      SoftLayer host type: "Hardware" by default, or "VirtualGuests"
     --private        use SoftLayer private network URL (otherwise public is used)
 -r, --renewal=NUM    day-of-month the projected bandwidth metric is inaccurate
 -t, --timeout=NUM    seconds to wait before aborting web service calls
 -w, --warning=NUM    warning threshold (% of monthly data transfer allocation)
 -c, --critical=NUM   critical threshold (% of monthly data transfer allocation)
+-o, --overage-projected-critical  treat a projected overage as critical
+-O, --overage-current-critical    treat a current overage as critical
 -v, --verbose        show more detail; use up to three times to increase the level
 USAGE
 }
@@ -172,22 +176,13 @@ my $bandwidth
 my $status_code = 3;   # default to unknown
 my $message = '';
 
-if ($bandwidth->{currentlyOverAllocationFlag}) {
-    $status_code = 2;
-    $message = "Currently " . sprintf($number_format, $bandwidth->{outboundBandwidthAmount} - $bandwidth->{allocationAmount}) . "$units over allocation!";
-    $message .= " Projected overage " . sprintf($number_format, $bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "$units.";
-}
-elsif ($bandwidth->{projectedOverAllocationFlag} && ($opt{renewal} != $dom)) {
-    $status_code = 2;
-    $message = "Projected bandwidth " . sprintf($number_format, $bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount}) . "$units over allocation!";
-}
-elsif (! defined $bandwidth->{outboundBandwidthAmount}) {
+if (! defined $bandwidth->{outboundBandwidthAmount}) {
     $status_code = 3;
-    $message = "Missing outboundBandwidthAmount, so can't check usage";
+    $message = "Missing outboundBandwidthAmount, so can't check usage.";
 }
 elsif (! defined $bandwidth->{allocationAmount}) {
     $status_code = 3;
-    $message = "Missing allocationAmount, so can't check proportion used";
+    $message = "Missing allocationAmount, so can't check proportion used.";
 }
 elsif ($bandwidth->{outboundBandwidthAmount} >= $bandwidth->{allocationAmount}) {
     $status_code = 2;
@@ -197,17 +192,33 @@ else {
     my $used = $bandwidth->{outboundBandwidthAmount} / $bandwidth->{allocationAmount} * 100;
     if (defined $opt{critical} and $used >= $opt{critical}) {
         $status_code = 2;
-        $message = sprintf($number_format, $used) . "% transfer used, over critical threshold of $opt{critical}%";
+        $message = sprintf($number_format, $used) . "% transfer used, over critical threshold of $opt{critical}%.";
     }
     elsif (defined $opt{warning} and $used >= $opt{warning}) {
         $status_code = 1;
-        $message = sprintf($number_format, $used) . "% transfer used, over warning threshold of $opt{warning}%";
+        $message = sprintf($number_format, $used) . "% transfer used, over warning threshold of $opt{warning}%.";
     }
     else {
         # by now we've confirmed we have an amount and we're not over allocation, so we should be ok
         $status_code = 0;
-        $message = sprintf($number_format, $used) . '% allocation used';
+        $message = sprintf($number_format, $used) . '% allocation used.';
     }
+}
+
+if ($bandwidth->{currentlyOverAllocationFlag}) {
+    $status_code = 2 if $opt{overage_current_critical};
+    $message .= sprintf(
+        " Currently $number_format$units over allocation! Projected overage $number_format$units.",
+        $bandwidth->{outboundBandwidthAmount} - $bandwidth->{allocationAmount},
+        $bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount},
+    );
+}
+elsif ($bandwidth->{projectedOverAllocationFlag} && ($opt{renewal} != $dom)) {
+    $status_code = 2 if $opt{overage_projected_critical};
+    $message .= sprintf(
+        " Projected overage $number_format$units!",
+        $bandwidth->{projectedBandwidthUsage} - $bandwidth->{allocationAmount},
+    );
 }
 
 my $perf_data = '';
